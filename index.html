@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ink-bleed Type</title>
+<style>
+:root{--bg:#121214;--panel:#1a1a1e;--line:#2c2c33;--fg:#ececf1;--mute:#8d8d9a;--acc:#ffe92b}
+*{box-sizing:border-box}
+body{margin:0;display:flex;min-height:100vh;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{flex:1;min-width:0;padding:24px;display:flex;flex-direction:column;gap:14px;justify-content:center}
+#stage{width:100%;aspect-ratio:1600/560;border-radius:10px;background:#000;display:block}
+.bar{display:flex;gap:10px;align-items:center}
+.bar input[type=range]{flex:1}
+button{background:#26262c;color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:8px 14px;font:inherit;cursor:pointer}
+button:hover{border-color:#55555f}
+button.primary{background:var(--acc);color:#111;border-color:var(--acc);font-weight:600}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+aside{width:340px;background:var(--panel);border-left:1px solid var(--line);padding:20px;overflow-y:auto;max-height:100vh;position:sticky;top:0}
+h1{font-size:16px;margin:0 0 14px}
+h3{font-size:13px;color:var(--mute);font-weight:500;margin:20px 0 8px;padding-top:14px;border-top:1px solid var(--line)}
+textarea,select{width:100%;background:#0e0e10;color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:9px;font:inherit}
+textarea{resize:vertical;min-height:70px}
+.row{display:grid;grid-template-columns:112px 1fr 40px;gap:8px;align-items:center;margin:7px 0}
+.row span:last-child{color:var(--mute);text-align:right;font-variant-numeric:tabular-nums}
+.pal{display:flex;gap:6px;margin:8px 0}
+.pal input{flex:1;height:36px;padding:0;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips button{padding:5px 10px;font-size:12px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+label.chk{display:flex;gap:8px;align-items:center;margin:8px 0}
+input[type=range]{accent-color:var(--acc)}
+.hint{color:var(--mute);font-size:12px;margin:6px 0 0}
+@media(max-width:900px){body{flex-direction:column}aside{width:100%;max-height:none;position:static}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<main>
+  <canvas id="stage" width="1600" height="560"></canvas>
+  <div class="bar">
+    <button id="play" class="primary" style="min-width:84px">Pause</button>
+    <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Scrub timeline">
+  </div>
+</main>
+
+<aside>
+  <h1>Ink-bleed Type</h1>
+  <textarea id="text" placeholder="Add your text...">Add your text...</textarea>
+  <label class="chk"><input type="checkbox" id="upper" checked> All caps</label>
+
+  <h3>Text</h3>
+  <select id="font">
+    <option value="700|Inter,'Helvetica Neue',Helvetica,Arial,sans-serif">Bold sans (default)</option>
+    <option value="900|'Arial Black',Impact,sans-serif">Arial Black</option>
+    <option value="400|Impact,'Arial Narrow Bold',sans-serif">Impact</option>
+    <option value="700|Georgia,'Times New Roman',serif">Bold serif</option>
+    <option value="700|'Courier New',monospace">Bold mono</option>
+  </select>
+  <div id="g-text"></div>
+
+  <h3>Color Palette</h3>
+  <div class="pal" id="pal"></div>
+  <div class="chips" id="presets"></div>
+  <div class="two">
+    <label>Background<br><input type="color" id="bg" value="#000000" style="width:100%;height:34px;padding:0;border:1px solid var(--line);border-radius:6px;background:none"></label>
+    <label>Text color<br><input type="color" id="tc" value="#ffffff" style="width:100%;height:34px;padding:0;border:1px solid var(--line);border-radius:6px;background:none"></label>
+  </div>
+
+  <h3>Effect</h3>
+  <div id="g-fx"></div>
+
+  <h3>Motion</h3>
+  <div id="g-motion"></div>
+  <div class="two">
+    <select id="dir"><option value="1">Left → right</option><option value="-1">Right → left</option></select>
+    <select id="mode"><option value="loop">Loop</option><option value="pingpong">Ping-pong</option><option value="once">Play once</option></select>
+  </div>
+  <select id="ease" style="margin-top:8px"><option value="linear">Easing: linear</option><option value="inout" selected>Easing: ease in-out</option><option value="in">Easing: ease in</option><option value="out">Easing: ease out</option></select>
+
+  <h3>Export</h3>
+  <div class="two">
+    <button id="png">Save PNG</button>
+    <button id="mp4">Save MP4</button>
+  </div>
+  <p class="hint">MP4 records one full cycle, including the hold. Needs Chrome/Edge 126+ or Safari.</p>
+</aside>
+
+<script>
+const VS=`attribute vec2 p;varying vec2 vUv;void main(){vUv=p*.5+.5;gl_Position=vec4(p,0.,1.);}`;
+const FS=`precision highp float;
+uniform sampler2D uTex;uniform vec2 uRes,uBounds;
+uniform float uP,uTime,uBand,uWarp,uBlur,uDil,uStr,uScale,uDir,uGrain;
+uniform vec3 uPal[5];uniform vec3 uBg,uTc;varying vec2 vUv;
+float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y);}
+float fbm(vec2 p){float a=.5,s=0.;for(int i=0;i<3;i++){s+=a*n(p);p=p*2.03+vec2(1.7,9.2);a*=.5;}return s;}
+vec3 pal(float t){t=clamp(t,0.,1.)*4.;vec3 c=uPal[0];
+ for(int i=0;i<4;i++){if(t>=float(i)&&t<=float(i+1))c=mix(uPal[i],uPal[i+1],t-float(i));}return c;}
+void main(){
+ vec2 uv=vUv;float asp=uRes.x/uRes.y;
+ vec2 b=uDir>0.?uBounds:vec2(1.-uBounds.y,1.-uBounds.x);
+ float x=uDir>0.?uv.x:1.-uv.x;
+ float wob=(fbm(vec2(uv.y*3.,uTime*.5))-.5)*.10;
+ float c=mix(b.x-uBand,b.y+uBand,uP);
+ float s=1.-smoothstep(0.,1.,abs((x+wob-c)/uBand));
+ float cuv=uDir>0.?c:1.-c;
+ vec2 q=uv*vec2(uScale*asp*1.2,uScale*3.)+vec2(uTime*.6,0.);
+ vec2 off=vec2((fbm(q)-.5)*uWarp*.12,(fbm(q+7.3)-.5)*uWarp*.07)*s;
+ vec2 suv=uv+off;
+ suv.x=cuv+(suv.x-cuv)/(1.+uStr*s);
+ float R=uBlur*s*.025;
+ vec2 rad=vec2(R/asp*(1.+uStr*s*1.5),R);
+ float sum=texture2D(uTex,suv).r,mx=sum;
+ for(int i=0;i<24;i++){
+  float r=sqrt((float(i)+.5)/24.),a=float(i)*2.39996;
+  float v=texture2D(uTex,suv+vec2(cos(a),sin(a))*r*rad).r;sum+=v;mx=max(mx,v);
+ }
+ float av=sum/25.;
+ float a=mix(av,mx,clamp(uDil*s,0.,1.));
+ float nn=fbm(uv*vec2(uScale*asp*2.,uScale*6.)+uTime*.3);
+ float t=clamp(pow(a,1.5)*.8+(nn-.5)*uGrain*a+.1,0.,1.);
+ float cov=smoothstep(.04,.3,a);
+ vec3 pcol=mix(uBg,pal(t),cov);
+ vec3 ocol=mix(uBg,uTc,texture2D(uTex,uv).r);
+ gl_FragColor=vec4(mix(ocol,pcol,smoothstep(0.,.2,s)),1.);
+}`;
+
+const $=id=>document.getElementById(id);
+const cv=$('stage'),W=cv.width,H=cv.height;
+const gl=cv.getContext('webgl',{preserveDrawingBuffer:true,antialias:false});
+if(!gl){document.body.innerHTML="<p style='padding:24px'>This browser does not support WebGL.</p>";throw 0}
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(o));return o}
+const pg=gl.createProgram();gl.attachShader(pg,sh(gl.VERTEX_SHADER,VS));gl.attachShader(pg,sh(gl.FRAGMENT_SHADER,FS));gl.linkProgram(pg);gl.useProgram(pg);
+const buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+const loc=gl.getAttribLocation(pg,'p');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+const U={};const uf=n=>U[n]||(U[n]=gl.getUniformLocation(pg,n));
+const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);
+[[gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR],[gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE]].forEach(([a,b])=>gl.texParameteri(gl.TEXTURE_2D,a,b));
+gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+gl.viewport(0,0,W,H);
+
+/* ---------- Controls ---------- */
+const S={};
+function mk(host,list){list.forEach(([id,label,min,max,step,val])=>{
+  S[id]=val;const r=document.createElement('div');r.className='row';
+  r.innerHTML=`<label for="${id}">${label}</label><input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${val}"><span>${val}</span>`;
+  $(host).appendChild(r);const inp=r.querySelector('input'),out=r.querySelector('span');
+  inp.oninput=()=>{S[id]=+inp.value;out.textContent=inp.value;if(id=='size'||id=='lh'||id=='track')drawText()};
+})}
+mk('g-text',[['size','Font size',40,320,1,170],['lh','Line height',.7,1.6,.01,.92],['track','Letter spacing',-.1,.3,.005,-.01]]);
+mk('g-fx',[['warp','Warp',0,4,.05,2],['blur','Blur',0,4,.05,1.6],['dil','Dilate',0,1,.01,.55],['str','Stretch',0,3,.05,1.2],['scale','Noise scale',.5,6,.05,2],['grain','Color bleed',0,2.5,.05,1.1]]);
+mk('g-motion',[['band','Band width',.05,.8,.01,.28],['dur','Duration (s)',.5,8,.1,2.4],['hold','Hold (s)',0,5,.1,.8]]);
+
+const PRESETS={
+ 'Yellow + Purple':['#ffffff','#ffe92b','#ffd900','#4a22c9','#ffee3d'],
+ 'Cyan + Indigo':['#ffffff','#7be8ff','#1aa7ff','#2a1bb5','#6ff2d4'],
+ 'Orange + Magenta':['#ffffff','#ffd37a','#ff6a3d','#8a1c8f','#ffb15c'],
+ 'Lime + Navy':['#ffffff','#d6ff3a','#27e36b','#0b3d91','#d6ff3a'],
+ 'Silver + Black':['#ffffff','#d0d0d0','#8a8a8a','#1c1c1c','#e6e6e6']};
+const pal=$('pal');
+for(let i=0;i<5;i++){const e=document.createElement('input');e.type='color';e.title='Color stop '+(i+1);pal.appendChild(e)}
+function setPal(a){[...pal.children].forEach((e,i)=>e.value=a[i])}
+Object.entries(PRESETS).forEach(([k,v])=>{const b=document.createElement('button');b.textContent=k;b.onclick=()=>setPal(v);$('presets').appendChild(b)});
+setPal(PRESETS['Yellow + Purple']);
+
+const hex=h=>[1,3,5].map(i=>parseInt(h.substr(i,2),16)/255);
+
+/* ---------- Text texture ---------- */
+const tc=document.createElement('canvas');tc.width=W;tc.height=H;const cx=tc.getContext('2d');
+let bounds=[.2,.8];
+function drawText(){
+  const [wt,fam]=$('font').value.split('|');
+  let txt=$('text').value||'';if($('upper').checked)txt=txt.toUpperCase();
+  const lines=txt.split('\n');
+  cx.fillStyle='#000';cx.fillRect(0,0,W,H);
+  cx.fillStyle='#fff';cx.textAlign='center';cx.textBaseline='middle';
+  cx.font=`${wt} ${S.size}px ${fam}`;
+  if('letterSpacing' in cx)cx.letterSpacing=(S.track*S.size)+'px';
+  const lh=S.size*S.lh,y0=H/2-(lines.length-1)*lh/2;let mw=0;
+  lines.forEach((l,i)=>{cx.fillText(l,W/2,y0+i*lh);mw=Math.max(mw,cx.measureText(l).width)});
+  const half=Math.min(mw,W)/2/W;bounds=[.5-half,.5+half];
+  gl.bindTexture(gl.TEXTURE_2D,tex);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,tc);
+}
+['text','upper','font'].forEach(id=>$(id).addEventListener('input',drawText));
+
+/* ---------- Timeline ---------- */
+const E={linear:p=>p,inout:p=>p<.5?4*p*p*p:1-Math.pow(-2*p+2,3)/2,in:p=>p*p*p,out:p=>1-Math.pow(1-p,3)};
+let t=0,playing=true,last=performance.now(),rec=null;
+const cycle=()=>S.dur+S.hold;
+function state(){
+  let l;const c=cycle(),m=$('mode').value;
+  if(m=='once')l=Math.min(t,S.dur);
+  else if(m=='pingpong'){const u=t%(2*c);l=u<=c?u:2*c-u}
+  else l=t%c;
+  return{local:l,p:E[$('ease').value](Math.min(l/S.dur,1))};
+}
+function render(){
+  const{local,p}=state();
+  gl.uniform1i(uf('uTex'),0);
+  gl.uniform2f(uf('uRes'),W,H);gl.uniform2f(uf('uBounds'),bounds[0]-.02,bounds[1]+.02);
+  gl.uniform1f(uf('uP'),p);gl.uniform1f(uf('uTime'),local);
+  gl.uniform1f(uf('uBand'),S.band);gl.uniform1f(uf('uWarp'),S.warp);gl.uniform1f(uf('uBlur'),S.blur);
+  gl.uniform1f(uf('uDil'),S.dil);gl.uniform1f(uf('uStr'),S.str);gl.uniform1f(uf('uScale'),S.scale);
+  gl.uniform1f(uf('uGrain'),S.grain);gl.uniform1f(uf('uDir'),+$('dir').value);
+  gl.uniform3fv(uf('uPal'),new Float32Array([...pal.children].flatMap(e=>hex(e.value))));
+  gl.uniform3fv(uf('uBg'),new Float32Array(hex($('bg').value)));
+  gl.uniform3fv(uf('uTc'),new Float32Array(hex($('tc').value)));
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  if(playing)$('scrub').value=Math.round(Math.min(local/S.dur,1)*1000);
+}
+function tick(now){
+  const dt=(now-last)/1000;last=now;
+  if(playing){t+=dt;
+    if(rec&&t>=cycle()){rec.stop();rec=null}
+    if($('mode').value=='once'&&t>cycle()+.01){playing=false;$('play').textContent='Replay';}
+  }
+  render();requestAnimationFrame(tick);
+}
+$('play').onclick=()=>{
+  if($('play').textContent=='Replay'){t=0}
+  playing=!playing;$('play').textContent=playing?'Pause':'Play';last=performance.now();
+};
+$('scrub').oninput=e=>{playing=false;$('play').textContent='Play';t=(+e.target.value/1000)*S.dur};
+
+/* ---------- Export ---------- */
+function save(url,name){const a=document.createElement('a');a.href=url;a.download=name;a.click()}
+$('png').onclick=()=>{render();save(cv.toDataURL('image/png'),'ink-bleed-type.png')};
+$('mp4').onclick=()=>{
+  if(rec)return;
+  const mime=['video/mp4;codecs=avc1.42E01E','video/mp4;codecs=avc1','video/mp4'].find(m=>window.MediaRecorder&&MediaRecorder.isTypeSupported(m));
+  if(!mime){alert('This browser cannot record MP4. Use Chrome/Edge 126+ or Safari.');return}
+  const chunks=[];const r=new MediaRecorder(cv.captureStream(60),{mimeType:mime,videoBitsPerSecond:12e6});
+  r.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
+  r.onstop=()=>{save(URL.createObjectURL(new Blob(chunks,{type:'video/mp4'})),'ink-bleed-type.mp4');$('mp4').textContent='Save MP4'};
+  t=0;playing=true;$('play').textContent='Pause';last=performance.now();
+  rec=r;r.start();$('mp4').textContent='Recording...';
+};
+
+drawText();requestAnimationFrame(tick);
+</script>
+</body>
+</html>
